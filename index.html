@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ポーズ・マスター Dual(no whand)</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            font-family: 'Arial Black', 'Hiragino Kaku Gothic Pro', 'Meiryo', sans-serif;
+        }
+
+        .container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        video { display: none; }
+        canvas {
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover; 
+            transform: scaleX(-1);
+        }
+
+        /* ヘッダー：PC画面の最上部、左右端に固定 */
+        .ui-header {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 98%;
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: flex-start;
+            z-index: 30;
+            pointer-events: none;
+        }
+
+        .info-box {
+            background: rgba(0,0,0,0.7);
+            padding: 5px 20px;
+            border-radius: 12px;
+            font-size: clamp(20px, 4vh, 50px); 
+            border: 3px solid;
+            font-weight: 900;
+            text-shadow: 2px 2px 10px rgba(0,0,0,1);
+        }
+        #score-display { color: #00ffcc; border-color: #00ffcc; }
+        #timer-display { color: #ff3366; border-color: #ff3366; }
+
+        /* 出題コンテナ：位置を中央よりやや上にシフト（top: 48%） */
+        #command-container {
+            position: absolute;
+            top: 48%; 
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            width: 100%;
+            pointer-events: none;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2vh; /* 適度な行間を維持 */
+        }
+
+        .command-line {
+            font-weight: 900;
+            line-height: 0.85;
+            white-space: nowrap;
+            font-size: 40vh; 
+            transition: color 0.1s;
+            letter-spacing: -0.01em;
+        }
+
+        /* 上段（手）：ヘッダーと重ならないギリギリの高さを確保 */
+        #command-hand { 
+            color: #ff0000; 
+            text-shadow: 10px 10px 0px #000, -10px -10px 0px #000, 10px -10px 0px #000, -10px 10px 0px #000, 0 0 100px rgba(255,0,0,0.7);
+            margin-bottom: 1vh;
+        }
+        /* 下段（足） */
+        #command-leg { 
+            color: #00ff00; 
+            text-shadow: 10px 10px 0px #000, -10px -10px 0px #000, 10px -10px 0px #000, -10px 10px 0px #000, 0 0 100px rgba(0,255,0,0.7);
+        }
+
+        .command-line.correct-individual {
+            color: #ffff00 !important;
+            text-shadow: 10px 10px 0px #000, -10px -10px 0px #000, 0 0 120px rgba(255,255,0,1) !important;
+        }
+
+        #seikai-display {
+            display: none;
+            font-size: 40vh;
+            color: #ff9900;
+            font-weight: 900;
+            text-shadow: 15px 15px 0px #000, -15px -15px 0px #000, 0 0 150px rgba(255,153,0,1);
+        }
+        
+        #system-msg { 
+            font-size: 22vh; 
+            color: #ff0; 
+            font-weight: 900;
+            text-shadow: 5px 5px 0px #000, 0 0 40px rgba(255,0,255,1);
+            margin-bottom: 1vh;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            color: white;
+            text-align: center;
+        }
+
+        .overlay.preview-mode {
+            background: rgba(0,0,0,0.4);
+        }
+
+        .btn-start {
+            padding: 25px 60px;
+            font-size: 32px;
+            background: #ff0000;
+            color: white;
+            border: none;
+            border-radius: 60px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 0 30px rgba(255,0,0,0.6);
+        }
+
+        .guide-text {
+            margin-top: 30px;
+            font-size: 1.4rem;
+            line-height: 1.6;
+            color: #fff;
+            text-shadow: 0 0 10px #000;
+        }
+        .highlight { color: #00ff00; font-weight: bold; }
+        .red-text { color: #ff0000; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <video id="input_video" playsinline></video>
+        <canvas id="output_canvas"></canvas>
+
+        <div class="ui-header">
+            <div id="score-display" class="info-box">SCORE: <span id="val-score">0</span></div>
+            <div id="timer-display" class="info-box">TIME: <span id="val-timer">60</span></div>
+        </div>
+
+        <div id="command-container">
+            <div id="system-msg"></div>
+            <div id="command-hand" class="command-line" style="display:none;"></div>
+            <div id="command-leg" class="command-line" style="display:none;"></div>
+            <div id="seikai-display">せいかい</div>
+        </div>
+
+        <div id="start-screen" class="overlay">
+            <h1 style="font-size: 60px; margin-bottom: 10px;">ポーズ・マスター Dual(no whand)</h1>
+            <button class="btn-start" onclick="initApp()">カメラを起動する</button>
+            <div id="setup-guide" class="guide-text">
+                カメラを起動して、体全体が映る位置に下がってください。
+            </div>
+        </div>
+
+        <div id="result-screen" class="overlay" style="display: none;">
+            <h1 id="result-title" style="font-size: 10vh; color: #ffcc00; margin-bottom: 0;">TIME UP!</h1>
+            <div style="font-size: 8vh; margin: 20px 0;">SCORE: <span id="final-score" style="color:#00ff00;">0</span></div>
+            <div class="guide-text" style="background: rgba(0,0,0,0.6); padding: 25px; border-radius: 15px;">
+                <span class="highlight">もう一度あそぶには？</span><br>
+                再び <b>「どちらかの手を挙げる」</b> あと姿勢を戻す
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        
+        const handCommands = ["ひだりて", "みぎて"];
+        const legCommands = ["りょうあし", "ひだりあし", "みぎあし"];
+        
+        let currentHand = "";
+        let currentLeg = "";
+        let score = 0;
+        let timeLeft = 60;
+        let gameActive = false;
+        let waitingForNeutral = false;
+        let isTransitioning = false; 
+        let timerInterval = null;
+        let appInitialized = false;
+        let lastEndTime = 0;
+        
+        const START_COOLDOWN = 4000; 
+        const EXIT_HOLD_TIME = 4000;  
+        const LEG_THRESHOLD_RATIO = 0.80; 
+
+        let initialDistL = 0;
+        let initialDistR = 0;
+        let handUpHoldStartTime = null; 
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const synth = window.speechSynthesis;
+
+        function playSound(freq, duration) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        function speak(text) {
+            synth.cancel();
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = 'ja-JP';
+            uttr.rate = 2.2;
+            synth.speak(uttr);
+        }
+
+        function triggerRealStart() {
+            waitingForNeutral = false;
+            gameActive = true;
+            score = 0;
+            timeLeft = 60;
+            document.getElementById('val-score').innerText = score;
+            document.getElementById('val-timer').innerText = timeLeft;
+            document.getElementById('system-msg').style.display = 'none';
+            document.getElementById('command-hand').style.display = 'block';
+            document.getElementById('command-leg').style.display = 'block';
+            document.getElementById('seikai-display').style.display = 'none';
+            
+            playSound(880, 0.5);
+            nextCommand();
+
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('val-timer').innerText = timeLeft;
+                if (timeLeft <= 0) endGame(false);
+            }, 1000);
+        }
+
+        function prepareStart() {
+            if (gameActive || waitingForNeutral) return;
+            waitingForNeutral = true;
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('result-screen').style.display = 'none';
+            document.getElementById('system-msg').style.display = 'block';
+            document.getElementById('command-hand').style.display = 'none';
+            document.getElementById('command-leg').style.display = 'none';
+            document.getElementById('seikai-display').style.display = 'none';
+            document.getElementById('system-msg').innerText = "手を下げてスタート";
+        }
+
+        function nextCommand() {
+            const oldHand = currentHand;
+            const oldLeg = currentLeg;
+            while (true) {
+                currentHand = handCommands[Math.floor(Math.random() * handCommands.length)];
+                currentLeg = legCommands[Math.floor(Math.random() * legCommands.length)];
+                if (currentHand !== oldHand || currentLeg !== oldLeg) break;
+            }
+            
+            const hEl = document.getElementById('command-hand');
+            const lEl = document.getElementById('command-leg');
+            const sEl = document.getElementById('seikai-display');
+            
+            hEl.classList.remove('correct-individual');
+            lEl.classList.remove('correct-individual');
+            
+            sEl.style.display = 'none'; 
+            hEl.style.display = 'block'; 
+            lEl.style.display = 'block';
+            
+            hEl.innerText = currentHand;
+            lEl.innerText = currentLeg;
+            speak(currentHand + "、" + currentLeg);
+        }
+
+        function endGame(isAborted = false) {
+            gameActive = false;
+            waitingForNeutral = false;
+            isTransitioning = false;
+            clearInterval(timerInterval);
+            lastEndTime = Date.now();
+            
+            const resultScr = document.getElementById('result-screen');
+            resultScr.style.display = 'flex';
+            resultScr.classList.add('preview-mode');
+
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('command-hand').style.display = 'none';
+            document.getElementById('command-leg').style.display = 'none';
+            document.getElementById('seikai-display').style.display = 'none';
+            
+            const sysMsg = document.getElementById('system-msg');
+            sysMsg.style.display = 'block';
+            sysMsg.innerText = ""; 
+
+            if (isAborted) {
+                document.getElementById('result-title').innerText = "QUIT GAME";
+                speak("中断しました");
+            } else {
+                document.getElementById('result-title').innerText = "TIME UP!";
+                speak("終了しました。スコアは" + score + "点です");
+            }
+        }
+
+        function onResults(results) {
+            canvasElement.width = results.image.width;
+            canvasElement.height = results.image.height;
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (!gameActive) {
+                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+                if (results.poseLandmarks) {
+                    drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: 'rgba(255,255,255,0.6)', lineWidth: 2});
+                    drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#00ffcc', radius: 3});
+                }
+            } else {
+                canvasCtx.fillStyle = '#000';
+                canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            if (results.poseLandmarks) {
+                const lm = results.poseLandmarks;
+                const nose = lm[0], lWrist = lm[15], rWrist = lm[16];
+                const lAnkle = lm[27], rAnkle = lm[28], lHip = lm[23], rHip = lm[24];
+
+                const lHandUp = lWrist.y < nose.y;
+                const rHandUp = rWrist.y < nose.y;
+
+                const currentDistL = Math.abs(lAnkle.y - lHip.y);
+                const currentDistR = Math.abs(rAnkle.y - rHip.y);
+
+                if (!gameActive && !waitingForNeutral) {
+                    initialDistL = currentDistL;
+                    initialDistR = currentDistR;
+                }
+
+                const isLFootBent = initialDistL > 0 && currentDistL < (initialDistL * LEG_THRESHOLD_RATIO);
+                const isRFootBent = initialDistR > 0 && currentDistR < (initialDistR * LEG_THRESHOLD_RATIO);
+
+                const isSquat = isLFootBent && isRFootBent;
+                const isLFootOnly = isLFootBent && !isRFootBent;
+                const isRFootOnly = !isLFootBent && isRFootBent;
+
+                const isNeutral = !lHandUp && !rHandUp && !isLFootBent && !isRFootBent;
+
+                if (!gameActive && !waitingForNeutral && (lHandUp || rHandUp)) {
+                    if (Date.now() - lastEndTime > START_COOLDOWN) {
+                        prepareStart();
+                    }
+                }
+                if (waitingForNeutral && isNeutral) {
+                    triggerRealStart();
+                }
+
+                if (gameActive) {
+                    if (lHandUp || rHandUp) {
+                        if (handUpHoldStartTime === null) handUpHoldStartTime = Date.now();
+                        else if (Date.now() - handUpHoldStartTime >= EXIT_HOLD_TIME) {
+                            endGame(true);
+                            handUpHoldStartTime = null;
+                            return;
+                        }
+                    } else {
+                        handUpHoldStartTime = null;
+                    }
+
+                    if (!isTransitioning) {
+                        let handOK = false;
+                        let legOK = false;
+
+                        switch(currentHand) {
+                            case "りょうて": if(lHandUp && rHandUp) handOK = true; break;
+                            case "ひだりて": if(lHandUp && !rHandUp) handOK = true; break;
+                            case "みぎて": if(!lHandUp && rHandUp) handOK = true; break;
+                        }
+                        switch(currentLeg) {
+                            case "りょうあし": if(isSquat) legOK = true; break;
+                            case "ひだりあし": if(isLFootOnly) legOK = true; break;
+                            case "みぎあし": if(isRFootOnly) legOK = true; break;
+                        }
+
+                        const hEl = document.getElementById('command-hand');
+                        const lEl = document.getElementById('command-leg');
+                        const sEl = document.getElementById('seikai-display');
+                        
+                        if (handOK) hEl.classList.add('correct-individual');
+                        else hEl.classList.remove('correct-individual');
+
+                        if (legOK) lEl.classList.add('correct-individual');
+                        else lEl.classList.remove('correct-individual');
+
+                        if (handOK && legOK) {
+                            isTransitioning = true;
+                            score++;
+                            document.getElementById('val-score').innerText = score;
+                            
+                            hEl.style.display = 'none';
+                            lEl.style.display = 'none';
+                            sEl.style.display = 'block';
+                            
+                            playSound(1200, 0.2);
+
+                            setTimeout(() => {
+                                if (gameActive) {
+                                    isTransitioning = false;
+                                    nextCommand();
+                                }
+                            }, 400); 
+                        }
+                    }
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({ modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        pose.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await pose.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+
+        function initApp() {
+            if (appInitialized) return;
+            audioCtx.resume();
+            appInitialized = true;
+            document.querySelector('.btn-start').style.display = 'none';
+            document.getElementById('setup-guide').innerHTML = "<span style='color:#00ff00; font-size:24px;'>カメラ起動中...</span>";
+            
+            camera.start().then(() => {
+                document.getElementById('start-screen').classList.add('preview-mode');
+                document.getElementById('setup-guide').innerHTML = `
+                    <span class="highlight" style="font-size:32px;">全身をカメラに映してください</span><br><br>
+                    <b>【開始方法】</b><br>
+                    「どちらかの手をあげる」→「姿勢を戻す」でスタート！<br><br>
+                    <b>【中断方法】</b><br>
+                    「片手を４秒あげる」<br><br>
+                    <span class="red-text">上段（手）</span> と <span class="highlight">下段（足）</span> を同時にクリア！
+                `;
+            });
+        }
+    </script>
+</body>
+</html>
